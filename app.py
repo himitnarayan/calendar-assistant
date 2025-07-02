@@ -59,6 +59,7 @@ Return ONLY JSON (no text). The JSON must include:
 - end_time: in ISO format
 - timezone: user timezone (like 'Asia/Tokyo') if given, else return null
 
+If the user did not mention a year, default to the current year: {current_year}.
 Request:
 {request}
 """
