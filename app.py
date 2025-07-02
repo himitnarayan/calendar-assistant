@@ -50,6 +50,7 @@ def sanitize_and_parse_json(raw: str):
         raise ValueError(f"Failed to parse Gemini response: {e}")
 
 def build_prompt(request: str) -> str:
+    current_year = datetime.now().year
     return f"""
 You are an AI that extracts calendar appointments in structured JSON.
 
