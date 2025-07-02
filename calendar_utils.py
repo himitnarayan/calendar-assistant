@@ -8,19 +8,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# SERVICE_ACCOUNT_FILE = 'calender-bot-464618-6de65db35a80.json'
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 CALENDAR_ID = os.getenv("CALENDAR_ID")
+
+# Load credentials from environment variable
 credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS_JSON'])
 credentials = service_account.Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 
 
 def get_calendar_service():
-    credentials = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=SCOPES
-    )
-    credentials.refresh(Request())
+    # Refresh if needed (optional, but safe)
+    if credentials.expired and credentials.refresh_token:
+        credentials.refresh(Request())
+
     return build('calendar', 'v3', credentials=credentials)
+
 
 def create_event(summary, start_time: datetime, end_time: datetime):
     service = get_calendar_service()
@@ -31,6 +33,7 @@ def create_event(summary, start_time: datetime, end_time: datetime):
     }
     created_event = service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
     return created_event.get('htmlLink')
+
 
 def is_time_slot_available(start_time: datetime, end_time: datetime):
     service = get_calendar_service()
@@ -43,6 +46,7 @@ def is_time_slot_available(start_time: datetime, end_time: datetime):
     ).execute()
     events = events_result.get('items', [])
     return len(events) == 0
+
 
 def suggest_next_available_slot(start_from=None, duration_minutes=60, days_ahead=7):
     if start_from is None:
