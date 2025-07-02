@@ -22,3 +22,32 @@ This is a conversational appointment booking assistant built with **Streamlit**,
    ```bash
    git clone https://github.com/himitnarayan/calendar-assistant.git
    cd calendar-assistant
+   
+2.Create a virtual environment & install dependencies
+
+ ```bash
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+pip install -r requirements.txt
+```
+3.Configure Environment Variables
+Create a .env file:
+
+ ```.env
+GEMINI_API_KEY=your_gemini_api_key
+CALENDAR_ID=your_google_calendar_id
+```
+4.Add your Google service account JSON key
+
+Name it something like credentials.json (but DO NOT COMMIT it).
+
+Share your calendar with the service account email.
+
+5.Run the app
+```bash
+streamlit run app.py
+```
+📅 Example Prompt
+
+
+Schedule a 90-minute call with Meera on July 5 from 4:30am. I am in Tokyo, Japan.
