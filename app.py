@@ -1,53 +1,56 @@
+import os
+import re
+import json
+import pytz
 import streamlit as st
 from datetime import datetime, timedelta
 from dateutil.parser import isoparse
-import google.generativeai as genai
-from calendar_utils import is_time_slot_available, create_event, suggest_next_available_slot
-import json
-import os
-import re
-import pytz
 from dotenv import load_dotenv
+import google.generativeai as genai
+
+from calendar_utils import (
+    is_time_slot_available,
+    create_event,
+    suggest_next_available_slot,
+)
 
 # Load environment variables
 load_dotenv()
+DEFAULT_TIMEZONE = "Asia/Kolkata"
+CALENDAR_MODEL = "models/gemini-1.5-pro-latest"
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-MODEL_NAME = "models/gemini-1.5-pro-latest"
-model = genai.GenerativeModel(MODEL_NAME)
+model = genai.GenerativeModel(CALENDAR_MODEL)
 
-DEFAULT_TIMEZONE = "Asia/Kolkata"  # Use India timezone if none mentioned
-
-# Streamlit UI
+# Streamlit UI setup
 st.set_page_config(page_title="📅 Appointment Scheduler", layout="centered")
 st.title("🤖 AI Appointment Scheduler")
 st.markdown("Describe your appointment in natural language, and we'll book it!")
 
-user_input = st.text_area("📝 Your Request", placeholder="e.g., Schedule a 90-minute call with Meera on July 5 from 4:30am. I am in Tokyo, Japan.")
+# User input
+user_input = st.text_area(
+    "📝 Your Request",
+    placeholder="e.g., Schedule a 90-minute call with Meera on July 5 from 4:30am. I am in Tokyo, Japan.",
+)
 
-# ⏱ Correction function for timezone
+# Helpers
 def apply_default_timezone_if_missing(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return pytz.timezone(DEFAULT_TIMEZONE).localize(dt)
     return dt
 
-# 🧼 Safely parse Gemini response
 def sanitize_and_parse_json(raw: str):
     try:
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
-            raise ValueError("No valid JSON object found in response")
+            raise ValueError("No valid JSON object found in response.")
         return json.loads(match.group())
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse Gemini response: {e}")
 
-if st.button("📆 Book Appointment"):
-    if not user_input.strip():
-        st.warning("Please enter a valid request.")
-    else:
-        with st.spinner("🔍 Talking to Gemini..."):
-            prompt = f"""
+def build_prompt(request: str) -> str:
+    return f"""
 You are an AI that extracts calendar appointments in structured JSON.
 
 Return ONLY JSON (no text). The JSON must include:
@@ -57,10 +60,17 @@ Return ONLY JSON (no text). The JSON must include:
 - timezone: user timezone (like 'Asia/Tokyo') if given, else return null
 
 Request:
-{user_input}
+{request}
 """
+
+# Booking handler
+if st.button("📆 Book Appointment"):
+    if not user_input.strip():
+        st.warning("Please enter a valid request.")
+    else:
+        with st.spinner("🔍 Talking to Gemini..."):
             try:
-                response = model.generate_content(prompt)
+                response = model.generate_content(build_prompt(user_input))
                 parsed_json = sanitize_and_parse_json(response.text)
 
                 summary = parsed_json.get("summary")
