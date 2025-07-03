@@ -44,10 +44,19 @@ def sanitize_and_parse_json(raw: str):
     try:
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
-            raise ValueError("No valid JSON object found in response.")
+            st.error("❌ Could not find valid JSON in the response.")
+            with st.expander("🔍 Debug Info"):
+                st.subheader("Raw Gemini Response")
+                st.code(raw)
+            return None
         return json.loads(match.group())
     except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse Gemini response: {e}")
+        st.error("❌ Failed to parse Gemini response.")
+        with st.expander("🔍 Debug Info"):
+            st.subheader("Raw Gemini Response")
+            st.code(raw)
+            st.exception(e)
+        return None
 
 def build_prompt(request: str) -> str:
     current_year = datetime.now().year
@@ -68,12 +77,16 @@ Request:
 # Booking handler
 if st.button("📆 Book Appointment"):
     if not user_input.strip():
-        st.warning("Please enter a valid request.")
+        st.warning("⚠️ Please enter a valid appointment request.")
     else:
         with st.spinner("🔍 Talking to Gemini..."):
             try:
                 response = model.generate_content(build_prompt(user_input))
                 parsed_json = sanitize_and_parse_json(response.text)
+
+                if parsed_json is None:
+                    st.warning("⚠️ Gemini response could not be understood. Try rephrasing your request.")
+                    st.stop()
 
                 summary = parsed_json.get("summary")
                 start = isoparse(parsed_json.get("start_time"))
@@ -105,7 +118,10 @@ if st.button("📆 Book Appointment"):
                             st.error("❌ No available slots found in the next 7 days.")
                 else:
                     st.error("❌ Gemini response was incomplete or invalid.")
+                    with st.expander("🔍 Debug Info"):
+                        st.subheader("Parsed JSON (partial or invalid)")
+                        st.json(parsed_json)
 
             except Exception as e:
-                st.error("⚠️ Gemini response couldn't be processed.")
+                st.error("⚠️ An unexpected error occurred while processing the request.")
                 st.exception(e)
