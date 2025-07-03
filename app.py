@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from dateutil.parser import isoparse
 from dotenv import load_dotenv
 import google.generativeai as genai
+from timezonefinder import TimezoneFinder
+import geocoder
 
 from calendar_utils import (
     is_time_slot_available,
@@ -63,36 +65,51 @@ def sanitize_and_parse_json(raw: str):
             st.exception(e)
         return None
 
+def get_timezone_from_location():
+    try:
+        g = geocoder.ip('me')
+        if g.ok and g.latlng:
+            lat, lng = g.latlng
+            tf = TimezoneFinder()
+            tz = tf.timezone_at(lat=lat, lng=lng)
+            if tz:
+                return tz
+    except:
+        pass
+    return DEFAULT_TIMEZONE
+
 def resolve_relative_date_string(text, base_dt=None, timezone=DEFAULT_TIMEZONE):
     if base_dt is None:
         base_dt = datetime.now(pytz.timezone(timezone))
 
     replacements = {
-        "day after tomorrow": (base_dt + timedelta(days=2)).date().isoformat(),
-        "tomorrow": (base_dt + timedelta(days=1)).date().isoformat(),
-        "today": base_dt.date().isoformat(),
-        "yesterday": (base_dt - timedelta(days=1)).date().isoformat(),
+        "day after tomorrow": (base_dt + timedelta(days=2)),
+        "tomorrow": (base_dt + timedelta(days=1)),
+        "today": base_dt,
+        "yesterday": (base_dt - timedelta(days=1)),
     }
 
-    # Handle longest phrases first
-    for keyword, value in sorted(replacements.items(), key=lambda x: -len(x[0])):
-        text = re.sub(rf'\b{keyword}\b', value, text, flags=re.IGNORECASE)
+    for keyword, dt in sorted(replacements.items(), key=lambda x: -len(x[0])):
+        formatted = dt.strftime("%B %-d, %Y") if os.name != 'nt' else dt.strftime("%B %#d, %Y")
+        text = re.sub(rf'\b{keyword}\b', formatted, text, flags=re.IGNORECASE)
 
     return text
 
 def build_prompt(request: str) -> str:
     current_year = datetime.now().year
     return f"""
-You are an AI that extracts calendar appointments in structured JSON.
+You are an AI that extracts calendar appointments in structured JSON format.
 
-Return ONLY JSON (no text). The JSON must include:
-- summary: short title
-- start_time: in ISO format (resolve any relative expressions like "tomorrow", "next Monday", etc.)
-- end_time: in ISO format
-- timezone: user timezone (like 'Asia/Tokyo') if given, else return null
+Return ONLY JSON with these fields:
+- summary: short title (e.g., "Team Sync")
+- start_time: ISO 8601 datetime format
+- duration_minutes: integer (duration of the event in minutes)
+- timezone: user's timezone like "Asia/Kolkata" if mentioned, else null
 
-If the user did not mention a year, default to the current year: {current_year}.
-If the user used a relative date like “today” or “tomorrow”, resolve it to an actual date.
+Assume:
+- Default duration is 30 minutes if not mentioned
+- Resolve expressions like "today", "tomorrow", "next Friday" to actual date and time
+- Default to current year: {current_year}
 
 Request:
 {request}
@@ -105,27 +122,34 @@ def extract_appointment_details(prompt: str, retry=False):
     if parsed_json is None:
         return None
 
-    summary = parsed_json.get("summary")
+    summary = parsed_json.get("summary") or "Meeting"
     start_str = parsed_json.get("start_time")
-    end_str = parsed_json.get("end_time")
+    duration = parsed_json.get("duration_minutes", 30)
     tz_str = parsed_json.get("timezone")
 
-    if not all([summary, start_str, end_str]):
+    if not start_str:
         if not retry:
-            st.warning("⚠️ Gemini response was incomplete. Trying again...")
+            st.warning("⚠️ Gemini response was missing a start time. Trying again...")
             return extract_appointment_details(prompt, retry=True)
         else:
             st.error("❌ I couldn’t understand your request.")
-            st.info("💡 Please try again with more specific details, like:\n\n`Schedule a 30-minute meeting with John tomorrow at 4 PM in New York`")
             with st.expander("🔍 Debug Info"):
                 st.subheader("Parsed JSON (incomplete)")
                 st.json(parsed_json)
             return None
 
+    try:
+        start = isoparse(start_str)
+        end = start + timedelta(minutes=int(duration))
+    except Exception as e:
+        st.error("❌ Failed to parse time or duration.")
+        st.exception(e)
+        return None
+
     return {
         "summary": summary,
-        "start": isoparse(start_str),
-        "end": isoparse(end_str),
+        "start": start,
+        "end": end,
         "timezone": tz_str,
     }
 
@@ -138,7 +162,7 @@ def looks_valid_request(text: str) -> bool:
     return bool(has_time and has_date)
 
 # Booking logic
-if st.button("📆 Book Appointment"):
+if st.button("📓 Book Appointment"):
     if not user_input.strip():
         st.warning("⚠️ Please enter a valid appointment request.")
     elif not looks_valid_request(user_input):
@@ -146,9 +170,7 @@ if st.button("📆 Book Appointment"):
     else:
         with st.spinner("🔍 Talking to Gemini..."):
             try:
-                # Replace relative dates like "tomorrow" → "2025-07-04"
                 cleaned_input = resolve_relative_date_string(user_input)
-
                 prompt = build_prompt(cleaned_input)
                 result = extract_appointment_details(prompt)
 
@@ -162,26 +184,29 @@ if st.button("📆 Book Appointment"):
 
                 if tz_str:
                     tz = pytz.timezone(tz_str)
-                    start = start.astimezone(tz)
-                    end = end.astimezone(tz)
                 else:
-                    start = apply_default_timezone_if_missing(start)
-                    end = apply_default_timezone_if_missing(end)
+                    tz = pytz.timezone(get_timezone_from_location())
+
+                start = start.astimezone(tz)
+                end = end.astimezone(tz)
 
                 if is_time_slot_available(start, end):
                     link = create_event(summary, start, end)
                     st.success("✅ Appointment booked successfully!")
                     st.markdown(f"[📅 View in Calendar]({link})")
                 else:
-                    st.warning("⚠️ That time is already booked. Searching for next available slot...")
-                    start, end = suggest_next_available_slot(start_from=start)
-                    if start and end:
-                        link = create_event(summary, start, end)
-                        st.success("✅ Booked next available slot:")
-                        st.markdown(f"🕒 {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%H:%M')} ({start.tzinfo})")
-                        st.markdown(f"[📅 View in Calendar]({link})")
-                    else:
-                        st.error("❌ No available slots found in the next 7 days.")
+                    found = False
+                    for _ in range(5):  # Try up to 5 alternative slots
+                        start, end = suggest_next_available_slot(start_from=start)
+                        if start and end and is_time_slot_available(start, end):
+                            link = create_event(summary, start, end)
+                            st.success("✅ Booked next available slot:")
+                            st.markdown(f"🕒 {start.strftime('%Y-%m-%d %H:%M')} to {end.strftime('%H:%M')} ({start.tzinfo})")
+                            st.markdown(f"[📅 View in Calendar]({link})")
+                            found = True
+                            break
+                    if not found:
+                        st.error("❌ No available time slots found after checking multiple options.")
 
             except Exception as e:
                 st.error("⚠️ An unexpected error occurred while processing the request.")
